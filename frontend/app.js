@@ -8,10 +8,85 @@ const resultImage = document.querySelector("#result-image");
 const resultStage = document.querySelector("#result-stage");
 const downloadLink = document.querySelector("#download-link");
 const runButton = document.querySelector(".run-button");
+const modeValue = document.querySelector("#mode-value");
+const elapsedValue = document.querySelector("#elapsed-value");
+const cpuValue = document.querySelector("#cpu-value");
+const gpuValue = document.querySelector("#gpu-value");
+
+let startedAt = 0;
+let elapsedTimer = null;
+let statusTimer = null;
 
 function setStatus(text, isError = false) {
   statusEl.textContent = text;
   statusEl.classList.toggle("error", isError);
+}
+
+function formatSeconds(seconds) {
+  if (!Number.isFinite(seconds)) {
+    return "--";
+  }
+  return `${seconds.toFixed(seconds >= 10 ? 1 : 2)}s`;
+}
+
+function formatPercent(value) {
+  return Number.isFinite(value) ? `${value.toFixed(1)}%` : "--";
+}
+
+function updateMetrics(payload = {}) {
+  const device = payload.device || payload.requestedDevice;
+  modeValue.textContent = device ? device.toUpperCase() : "--";
+  cpuValue.textContent = formatPercent(payload.cpuPercent);
+
+  if (payload.gpu) {
+    const used = payload.gpu.memoryUsedMiB;
+    const total = payload.gpu.memoryTotalMiB;
+    gpuValue.textContent = `${payload.gpu.utilizationPercent}% / ${used}MB`;
+    gpuValue.title = `${used}MB / ${total}MB`;
+  } else {
+    gpuValue.textContent = device === "cpu" ? "未使用" : "--";
+    gpuValue.removeAttribute("title");
+  }
+
+  if (payload.activeJob && Number.isFinite(payload.activeJob.elapsedSeconds)) {
+    elapsedValue.textContent = formatSeconds(payload.activeJob.elapsedSeconds);
+  } else if (payload.lastJob && Number.isFinite(payload.lastJob.elapsedSeconds)) {
+    elapsedValue.textContent = formatSeconds(payload.lastJob.elapsedSeconds);
+  }
+}
+
+async function refreshStatus() {
+  try {
+    const response = await fetch("/api/status", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    updateMetrics(await response.json());
+  } catch (_) {
+    // The backend may still be loading or already stopped.
+  }
+}
+
+function startRuntimeTracking() {
+  startedAt = performance.now();
+  elapsedValue.textContent = "0.00s";
+  elapsedTimer = window.setInterval(() => {
+    elapsedValue.textContent = formatSeconds((performance.now() - startedAt) / 1000);
+  }, 200);
+  statusTimer = window.setInterval(refreshStatus, 1000);
+  refreshStatus();
+}
+
+function stopRuntimeTracking(finalElapsedSeconds) {
+  window.clearInterval(elapsedTimer);
+  window.clearInterval(statusTimer);
+  elapsedTimer = null;
+  statusTimer = null;
+
+  if (Number.isFinite(finalElapsedSeconds)) {
+    elapsedValue.textContent = formatSeconds(finalElapsedSeconds);
+  }
+  refreshStatus();
 }
 
 function previewFile(input, image) {
@@ -43,6 +118,7 @@ form.addEventListener("submit", async (event) => {
   resultImage.hidden = true;
   downloadLink.hidden = true;
   resultStage.querySelector("span").textContent = "正在修复...";
+  startRuntimeTracking();
 
   try {
     const response = await fetch("/api/inpaint", {
@@ -60,11 +136,15 @@ form.addEventListener("submit", async (event) => {
     resultStage.querySelector("span").textContent = "";
     downloadLink.href = resultUrl;
     downloadLink.hidden = false;
+    updateMetrics(payload.status || payload);
     setStatus("完成");
   } catch (error) {
     resultStage.querySelector("span").textContent = error.message;
     setStatus("失败", true);
   } finally {
+    stopRuntimeTracking();
     runButton.disabled = false;
   }
 });
+
+refreshStatus();

@@ -5,7 +5,10 @@ import json
 import logging
 import os
 import posixpath
+import shutil
+import subprocess
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -40,11 +43,86 @@ from saicinpainting.evaluation.utils import move_to_device
 from saicinpainting.training.trainers import load_checkpoint
 
 LOGGER = logging.getLogger("lama-web")
+CPU_SAMPLE = None
+CPU_SAMPLE_LOCK = threading.Lock()
+
+
+def _read_cpu_times():
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as f:
+            fields = f.readline().split()
+    except OSError:
+        return None
+
+    if not fields or fields[0] != "cpu":
+        return None
+
+    values = [int(value) for value in fields[1:]]
+    idle = values[3] + (values[4] if len(values) > 4 else 0)
+    total = sum(values)
+    return idle, total
+
+
+def _cpu_percent():
+    global CPU_SAMPLE
+
+    current = _read_cpu_times()
+    if current is None:
+        return None
+
+    with CPU_SAMPLE_LOCK:
+        previous = CPU_SAMPLE
+        CPU_SAMPLE = current
+
+    if previous is None:
+        return None
+
+    idle_delta = current[0] - previous[0]
+    total_delta = current[1] - previous[1]
+    if total_delta <= 0:
+        return None
+
+    return round(max(0.0, min(100.0, 100.0 * (1.0 - idle_delta / total_delta))), 1)
+
+
+def _gpu_status():
+    if shutil.which("nvidia-smi") is None:
+        return None
+
+    try:
+        completed = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    first_line = completed.stdout.strip().splitlines()[0] if completed.stdout.strip() else ""
+    parts = [part.strip() for part in first_line.split(",")]
+    if len(parts) < 3:
+        return None
+
+    try:
+        return {
+            "utilizationPercent": int(parts[0]),
+            "memoryUsedMiB": int(parts[1]),
+            "memoryTotalMiB": int(parts[2]),
+        }
+    except ValueError:
+        return None
 
 
 class LamaPredictor:
     def __init__(self, model_dir: Path, device: str = "cpu"):
         self.model_dir = model_dir
+        self.requested_device = device
         self.device = torch.device(device if device == "cuda" and torch.cuda.is_available() else "cpu")
         self.model = self._load_model()
 
@@ -108,6 +186,9 @@ def _safe_name(filename, fallback):
 
 class LamaWebHandler(SimpleHTTPRequestHandler):
     predictor = None
+    active_job = None
+    last_job = None
+    state_lock = threading.Lock()
 
     def translate_path(self, path):
         parsed = urlparse(path)
@@ -132,6 +213,36 @@ class LamaWebHandler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(HTTPStatus.NO_CONTENT)
         self.end_headers()
+
+    def do_GET(self):
+        if urlparse(self.path).path == "/api/status":
+            _json_response(self, HTTPStatus.OK, self._status_payload())
+            return
+
+        super().do_GET()
+
+    @classmethod
+    def _status_payload(cls):
+        predictor = cls.predictor
+        device = str(predictor.device) if predictor is not None else "unknown"
+        requested_device = predictor.requested_device if predictor is not None else "unknown"
+
+        with cls.state_lock:
+            active_job = dict(cls.active_job) if cls.active_job else None
+            last_job = dict(cls.last_job) if cls.last_job else None
+
+        if active_job is not None:
+            active_job["elapsedSeconds"] = round(time.perf_counter() - active_job["startedAt"], 3)
+            active_job.pop("startedAt", None)
+
+        return {
+            "device": device,
+            "requestedDevice": requested_device,
+            "cpuPercent": _cpu_percent(),
+            "gpu": _gpu_status(),
+            "activeJob": active_job,
+            "lastJob": last_job,
+        }
 
     def do_POST(self):
         if self.path != "/api/inpaint":
@@ -166,16 +277,40 @@ class LamaWebHandler(SimpleHTTPRequestHandler):
             image_path.write_bytes(image_item.file.read())
             mask_path.write_bytes(mask_item.file.read())
 
+            started_at = time.perf_counter()
+            handler_state = type(self)
+            with handler_state.state_lock:
+                handler_state.active_job = {
+                    "jobId": job_id,
+                    "device": str(self.predictor.device),
+                    "startedAt": started_at,
+                }
+
             self.predictor.predict(image_path, mask_path, output_path)
+            elapsed_seconds = round(time.perf_counter() - started_at, 3)
+            with handler_state.state_lock:
+                handler_state.last_job = {
+                    "jobId": job_id,
+                    "device": str(self.predictor.device),
+                    "elapsedSeconds": elapsed_seconds,
+                    "finishedAt": time.time(),
+                }
+                handler_state.active_job = None
+
             _json_response(
                 self,
                 HTTPStatus.OK,
                 {
                     "resultUrl": f"/results/{output_path.name}",
                     "jobId": job_id,
+                    "device": str(self.predictor.device),
+                    "elapsedSeconds": elapsed_seconds,
+                    "status": self._status_payload(),
                 },
             )
         except Exception as ex:
+            with type(self).state_lock:
+                type(self).active_job = None
             LOGGER.error("Prediction failed: %s\n%s", ex, traceback.format_exc())
             _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(ex)})
 

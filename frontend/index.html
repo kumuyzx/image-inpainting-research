@@ -35,6 +35,25 @@
           <button class="run-button" type="submit">
             <span>开始修复</span>
           </button>
+
+          <div class="metrics" aria-label="runtime metrics">
+            <div class="metric">
+              <span class="metric-label">模式</span>
+              <span class="metric-value" id="mode-value">--</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">用时</span>
+              <span class="metric-value" id="elapsed-value">0.0s</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">CPU</span>
+              <span class="metric-value" id="cpu-value">--</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">GPU</span>
+              <span class="metric-value" id="gpu-value">--</span>
+            </div>
+          </div>
         </form>
 
         <section class="panel result-panel">
