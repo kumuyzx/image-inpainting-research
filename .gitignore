@@ -107,6 +107,7 @@ venv.bak/
 *.sw?
 
 # Local thesis demo outputs.
+data/
 outputs/uploads/
 outputs/results/
 outputs/lama-runs/
