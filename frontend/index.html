@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LaMa Inpainting</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>图像修复</h1>
+          <p>上传原图和对应 mask，浏览器中直接查看修复结果。</p>
+        </div>
+        <span class="status-pill" id="status">就绪</span>
+      </header>
+
+      <section class="workspace" aria-label="inpainting workspace">
+        <form class="panel controls" id="inpaint-form">
+          <label class="dropzone">
+            <span class="label">原图</span>
+            <input id="image-input" name="image" type="file" accept="image/*" required />
+            <img id="image-preview" alt="" />
+            <span class="hint">PNG / JPG / WEBP</span>
+          </label>
+
+          <label class="dropzone">
+            <span class="label">Mask</span>
+            <input id="mask-input" name="mask" type="file" accept="image/*" required />
+            <img id="mask-preview" alt="" />
+            <span class="hint">白色区域会被修复</span>
+          </label>
+
+          <button class="run-button" type="submit">
+            <span>开始修复</span>
+          </button>
+        </form>
+
+        <section class="panel result-panel">
+          <div class="result-header">
+            <h2>结果</h2>
+            <a id="download-link" class="download-link" href="#" download="lama-result.png" hidden>下载</a>
+          </div>
+          <div class="result-stage" id="result-stage">
+            <span>等待上传</span>
+            <img id="result-image" alt="修复结果" hidden />
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
