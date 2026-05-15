@@ -1,0 +1,8 @@
+/c/campus
+/b/building_facade
+/a/apartment_building/outdoor
+/c/courtyard
+/o/office_building
+/s/schoolhouse
+/s/skyscraper
+/t/tower

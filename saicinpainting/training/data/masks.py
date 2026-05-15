@@ -315,6 +315,47 @@ class MixedMaskGenerator:
         return result
 
 
+class WeightedMaskGenerator:
+    def __init__(self, variants):
+        self.probas = []
+        self.gens = []
+
+        for variant in variants:
+            variant = dict(variant)
+            proba = float(variant.pop('proba'))
+            kind = variant.pop('kind')
+            kwargs = dict(variant.pop('kwargs', {}) or {})
+
+            if proba <= 0:
+                continue
+            self.probas.append(proba)
+
+            if kind == 'irregular':
+                kwargs['draw_method'] = DrawMethod.LINE
+                self.gens.append(RandomIrregularMaskGenerator(**kwargs))
+            elif kind == 'squares':
+                kwargs['draw_method'] = DrawMethod.SQUARE
+                self.gens.append(RandomIrregularMaskGenerator(**kwargs))
+            elif kind == 'box':
+                self.gens.append(RandomRectangleMaskGenerator(**kwargs))
+            elif kind == 'outpainting':
+                self.gens.append(OutpaintingMaskGenerator(**kwargs))
+            elif kind == 'superres':
+                self.gens.append(RandomSuperresMaskGenerator(**kwargs))
+            else:
+                raise NotImplementedError(f'No such weighted mask variant kind = {kind}')
+
+        if not self.gens:
+            raise ValueError('WeightedMaskGenerator requires at least one positive-probability variant')
+
+        self.probas = np.array(self.probas, dtype='float32')
+        self.probas /= self.probas.sum()
+
+    def __call__(self, img, iter_i=None, raw_image=None):
+        kind = np.random.choice(len(self.probas), p=self.probas)
+        return self.gens[kind](img, iter_i=iter_i, raw_image=raw_image)
+
+
 def get_mask_generator(kind, kwargs):
     if kind is None:
         kind = "mixed"
@@ -323,6 +364,8 @@ def get_mask_generator(kind, kwargs):
 
     if kind == "mixed":
         cl = MixedMaskGenerator
+    elif kind == "weighted":
+        cl = WeightedMaskGenerator
     elif kind == "outpainting":
         cl = OutpaintingMaskGenerator
     elif kind == "dumb":

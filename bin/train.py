@@ -12,17 +12,30 @@ os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
 
 import hydra
+import torch
 from omegaconf import OmegaConf
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.plugins import DDPPlugin
 
 from saicinpainting.training.trainers import make_training_model
 from saicinpainting.utils import register_debug_signal_handlers, handle_ddp_subprocess, handle_ddp_parent_process, \
     handle_deterministic_config
 
 LOGGER = logging.getLogger(__name__)
+
+
+def init_from_checkpoint(training_model, checkpoint_path, strict=True):
+    if not checkpoint_path:
+        return
+
+    LOGGER.info('Initializing model weights from %s', checkpoint_path)
+    state = torch.load(checkpoint_path, map_location='cpu')
+    missing, unexpected = training_model.load_state_dict(state['state_dict'], strict=strict)
+    if missing:
+        LOGGER.warning('Missing keys while initializing from checkpoint: %s', missing)
+    if unexpected:
+        LOGGER.warning('Unexpected keys while initializing from checkpoint: %s', unexpected)
 
 
 @handle_ddp_subprocess()
@@ -49,6 +62,11 @@ def main(config: OmegaConf):
         metrics_logger.log_hyperparams(config)
 
         training_model = make_training_model(config)
+        init_from_checkpoint(
+            training_model,
+            config.training_model.get('init_from_checkpoint'),
+            strict=config.training_model.get('init_strict', True),
+        )
 
         trainer_kwargs = OmegaConf.to_container(config.trainer.kwargs, resolve=True)
         if need_set_deterministic:
